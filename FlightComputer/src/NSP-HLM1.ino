@@ -9,6 +9,7 @@
 #include "TinyGPS++.h"
 #include "Serial5/Serial5.h"
 #include "Serial4/Serial4.h"
+#include "ParticleSoftSerial.h"
 
 //====[SETTINGS]=================================================
 bool cellModemEnabled = true;  //NO CONST!
@@ -66,11 +67,16 @@ SYSTEM_THREAD(ENABLED);
 #define SDCardEvent serialEvent4
 #define SATCOM Serial5
 #define SATCOMEvent serialEvent5
+#define RADIO SoftSer
 #define SATCOMEnablePin D2
 #define EXTSTATUSLEDPin A5
 #define BUZZERPin D4
 #define SONARPin A1
 #define TEMPSENSORPin A0
+#define RADIO_RXPIN A2
+#define RADIO_TXPIN A3
+#define SW0 A5
+
 
 //====[VARIABLES]=================================================
 //## DO NOT MODIFY
@@ -106,6 +112,7 @@ int cellSignalRSSI = -1;
 int cellSignalQuality = -1;
 
 String computerSerialData;
+String radioSerialData;
 String SDCardSerialData;
 String satSerialData;
 String lastSatModemRequest = "";
@@ -132,6 +139,7 @@ GPSState gpsState = unknown;
 
 TinyGPSCustom gpsFixType(gpsParser, "GPGGA", 6); // $GPGGA fixType decoding from GPS
 
+ParticleSoftSerial SoftSer(RADIO_RXPIN, RADIO_TXPIN); 
 
 //====[PARTICLE CLOUD FNs]=================================
 bool success = Particle.function("c", computerRequest);
@@ -148,7 +156,8 @@ void setup() {
 	//Setup SATCOM
 	pinMode(SATCOMEnablePin, OUTPUT);	
 	pinMode(BUZZERPin, OUTPUT);	
-	pinMode(EXTSTATUSLEDPin, OUTPUT);	
+	pinMode(EXTSTATUSLEDPin, OUTPUT);
+	pinMode(SW0, INPUT_PULLDOWN);
 	// pinMode(SONARPin, INPUT);
 	digitalWrite(SATCOMEnablePin, HIGH);
 	digitalWrite(BUZZERPin, LOW);
@@ -161,6 +170,8 @@ void setup() {
 	COMPUTER.begin(57600);	
 	//CONNECT TO SDCARD LOGGER
 	SDCARD.begin(115200); //MAKE SURE YOU SET THIS UP IN THE CONFIG.TXT (115200,26,3,0,1,1,0)
+	//CONNECT TO XBEE
+	RADIO.begin(9600);
 	delay(100);
 
 	//INIT SDCARD
@@ -193,13 +204,21 @@ void setup() {
 
 void loop() {
 	uint currentTime = millis(); //Get the time since boot.
-	uint currentPeriod = currentTime - lastCycleTime; //Calculate elapsed time since last loop.
+	uint currentPeriod = currentTime - lastCycleTime; //Calculate elapsed time since last loop.	
 
 
 	if (currentPeriod > 500) { //Every half a second
 		//getExternalSensorData(); //TODO
 		//writeDataToSDCard(); //TODO
-		signalFlareCheck();		
+		// if (GPS.available()) {
+		// 	GPSEventRX();
+		// }
+
+		if (RADIO.available()) {
+			radioEvent();
+		}
+
+		signalFlareCheck();				
 	}
 
 	if (currentPeriod >	1000) { //Every Second
@@ -217,6 +236,7 @@ void loop() {
 
 
 	if (elapsedSeconds >= 240) { elapsedSeconds = 0; } //Prevent overflow
+	
 	
 } 
 
@@ -563,7 +583,12 @@ void updateGPSFixType() {
 void sendToComputer(String text) {
 	TRY_LOCK(COMPUTER) {	
 		COMPUTER.println(text);
-	}
+	}	
+	sendToRadio(text);
+}
+
+void sendToRadio(String text) {	
+	RADIO.println(text);
 }
 
 void sendToSDCard(String text) {	
@@ -586,6 +611,7 @@ void SATCOMEvent() {
 				TRY_LOCK(COMPUTER) {
 					COMPUTER.write(c);
 				}
+				RADIO.write(c);
 			}
 			if (c == '\r') {				
 				satSerialData = satSerialData.trim();									
@@ -619,10 +645,15 @@ void SATCOMEvent() {
 		}	
 }
 
+void SW0Event() 
+{
+	COMPUTER.write("C");
+}
+
 void GPSEvent()
 {	
-	if (GPS.available()) {
-		while (GPS.available()) {			
+	
+		while (GPS.available()) {					
 			char c = GPS.read();			
 			gpsParser.encode(c);
 			if (gpsDebugDump==true && satDebugDump==false) {
@@ -631,7 +662,7 @@ void GPSEvent()
 				}
 			}			
 		}
-	}	
+		
 
 	updateGPSFixType();
 
@@ -654,6 +685,20 @@ void computerEvent()
 				computerSerialData = computerSerialData.remove(computerSerialData.indexOf('\n'));
 				computerRequest(computerSerialData);
 				computerSerialData = "";
+			}
+		}
+	}	
+}
+
+void radioEvent() {	
+	if (RADIO.available()) {
+		while (RADIO.available()) {			
+			char c = RADIO.read();
+			radioSerialData = radioSerialData + c;
+			if (c == '\n') {
+				radioSerialData = radioSerialData.remove(radioSerialData.indexOf('\n'));
+				computerRequest(radioSerialData);
+				radioSerialData = "";
 			}
 		}
 	}	
@@ -1080,6 +1125,59 @@ int computerRequest(String param) {
 		COMPUTER.println("$$$ = Print and send to SAT cloud status string");		
 		COMPUTER.println("-------------------------.--------------------------");
 		}
+		RADIO.println("-------------------------.--------------------------.--------------------");		
+		RADIO.println("Status Sentence (1hz):");
+		RADIO.println("TIME,LAT,LON,ALT,SPEED,COURSE,SATS,HDOP,BATT,SAT,STAGE,SONAR,ALTPM,ALTGAIN");
+		RADIO.println("-------------------------.--------------------------.--------------------");		
+		RADIO.println("deboff = Debug Off");
+		RADIO.println("debon = Debug On");
+		RADIO.println("simon = Start Simulation");
+		RADIO.println("simoff = Stop Simulation");
+		RADIO.println("reset = Set mission to ground mode");
+		RADIO.println("reboot = Reboot Flight Computer");
+		RADIO.println("simon = Start Simulation");
+		RADIO.println("cellon = Cell Modem On");
+		RADIO.println("celloff = Cell Modem Off");
+		RADIO.println("cellmute = Toggle Cell Reporting");
+		RADIO.println("satmute = Toggle Sat Reporting");
+		RADIO.println("flymode = Set system to fly mode [needed for mission]");
+		RADIO.println("rigmode = Toggle Sat Reporting [disbales fly mode]");
+		RADIO.println("saton = SAT Modem ON");
+		RADIO.println("satoff = SAT Modem Off");
+		RADIO.println("comoff = All Comunication systems OFF [cell + sat]");
+		RADIO.println("comon = All Comunication systems ON [cell + sat]");
+		RADIO.println("gpsdump = GPS Serial Dump to computer toggle");
+		RADIO.println("satdump = SATCOM Serial Dump to computer toggle");
+		RADIO.println("sddump = SDCARD Serial Dump to computer toggle");
+		RADIO.println("querysatsignal = Send a request to the satelite modem to get sat signal");
+		RADIO.println("querycellsignal = Send a request to the cellular modem to get RSSI signal");
+		RADIO.println("buzzeron = Turn Buzzer ON");
+		RADIO.println("buzzeroff = Turn Buzzer ON");
+		RADIO.println("buzzerchirp = Chirp the buzzer");
+		RADIO.println("resetinitialaltitude = Set the initial altitude to current altitude");
+		RADIO.println("preflight? = Go no Go for launch");
+		RADIO.println("initialaltitude? = Get the initial altitude set uppon gps fix");
+		RADIO.println("vsi? = Vertical Speed?");
+		RADIO.println("alt? = Altitude in feet?");
+		RADIO.println("cell? = Cell Status?");		
+		RADIO.println("cellconnecting? = Cell Modem attempting to connect?");
+		RADIO.println("cellsignal? = Cell Signal Strength [RSSI,QUAL] ?");
+		RADIO.println("cloud? = Is cloud available?");
+		RADIO.println("satsignal? = 0-5 Satcom signal strength?");		
+		RADIO.println("satenabled? = Is the sat modem enabled?");		
+		RADIO.println("flymode? = Is the system in fly mode?");		
+		RADIO.println("bat? = Get battery level?");	
+		RADIO.println("gpsfix? = Get GpsFix ValueType? (0=NoFix,1=Fix,2=DGPSFix)");
+		RADIO.println("sonar? = Get the sonar distance in meters. (cm for cell)");
+		RADIO.println("temp? = Get the internal (onboard) temperature in C");
+		RADIO.println("fwversion? = OS Firmware Version?");		
+		RADIO.println(">cmd = Set SD to Command Mode");		
+		RADIO.println(">init = Force Initialize");			
+		RADIO.println(">set = Enter set Menu");
+		RADIO.println("$ = Print status string");		
+		RADIO.println("$$ = Print and send to CELL cloud status string");		
+		RADIO.println("$$$ = Print and send to SAT cloud status string");		
+		RADIO.println("-------------------------.--------------------------");
 	}
 
 	return -99;
