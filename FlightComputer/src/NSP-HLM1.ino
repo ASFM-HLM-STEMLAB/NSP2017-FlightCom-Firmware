@@ -27,6 +27,8 @@ const float minimumSonarDistanceToConfirmRecovery = 1; //Meters
 const uint periodBetweenCellularReports = 30; //Seconds
 const uint periodBetweenSatelliteReports = 40; //Seconds
 const float minimumBatteryForLEDUse = 70;
+const int anticollisionFlashInterval = 18; //External LED flash ever x seconds (see altitude condition too)
+const float maximumAltitudeForAntiCollision = 38000; // In Feets..
 // const uint periodBetweenSDWriteReports = 5; //Seconds
 // const char *SDFileName = "NSP2017Log.txt";
 bool debugMode = true;  //NO CONST!
@@ -76,6 +78,7 @@ SYSTEM_THREAD(ENABLED);
 #define RADIO_RXPIN A2
 #define RADIO_TXPIN A3
 #define SW0 A5
+#define ANTICOL D1
 
 
 //====[VARIABLES]=================================================
@@ -95,7 +98,6 @@ float altitudeOfApogee = -1.0;
 float sonarDistance = -1.0; //In Meters
 float internalTempC = -1.0; //In C
 int gpsFixValue = 0;
-
 float simulatedAltitude = 0.0; //For simulation only.
 
 
@@ -158,6 +160,7 @@ void setup() {
 	pinMode(BUZZERPin, OUTPUT);	
 	pinMode(EXTSTATUSLEDPin, OUTPUT);
 	pinMode(SW0, INPUT_PULLDOWN);
+	pinMode(ANTICOL, OUTPUT);
 	// pinMode(SONARPin, INPUT);
 	digitalWrite(SATCOMEnablePin, HIGH);
 	digitalWrite(BUZZERPin, LOW);
@@ -207,12 +210,10 @@ void loop() {
 	uint currentPeriod = currentTime - lastCycleTime; //Calculate elapsed time since last loop.	
 
 
+	triggerAntiCollisionLight(currentPeriod);
+	
+
 	if (currentPeriod > 500) { //Every half a second
-		//getExternalSensorData(); //TODO
-		//writeDataToSDCard(); //TODO
-		// if (GPS.available()) {
-		// 	GPSEventRX();
-		// }
 
 		if (RADIO.available()) {
 			radioEvent();
@@ -333,23 +334,12 @@ void satcomKeepAlive() {
 
 void sendDataToCloud() {
 	if (elapsedSeconds % periodBetweenCellularReports == 0) { //CELLULAR
-		//if (celTelemetryTurn == 0) {
 			sendStatusToCell(); //Send STAT STRING to cloud via CELL if connected..			
-		//	celTelemetryTurn = 1;
-		//} else {
-//			sendExtendedDataToCell();
-//			celTelemetryTurn = 0;
-//		}
+
 	}
 
 	if (elapsedSeconds % periodBetweenSatelliteReports == 0) {	//SATELLITE
-	//	if (satTelemetryTurn == 0) {
 				sendStatusToSat();
-	//			satTelemetryTurn = 1;
-	//		} else {
-	//			sendExtendedDataToSat();			
-	//			satTelemetryTurn = 0;
-	// 	}		
 	}
 }
 
@@ -378,6 +368,14 @@ void signalFlareCheck() {
 			} else {			
 				digitalWrite(BUZZERPin, LOW);						
 		}
+	}
+}
+
+void triggerAntiCollisionLight(uint currentPeriod) {
+	if (currentPeriod > 1000 && (elapsedSeconds % anticollisionFlashInterval == 0) && (lastGPSAltitude < maximumAltitudeForAntiCollision)) {		
+		digitalWrite(ANTICOL, HIGH);		
+	} else {
+		digitalWrite(ANTICOL, LOW);
 	}
 }
 
@@ -1073,7 +1071,7 @@ int computerRequest(String param) {
 		TRY_LOCK(COMPUTER) {
 		COMPUTER.println("-------------------------.--------------------------.--------------------");		
 		COMPUTER.println("Status Sentence (1hz):");
-		COMPUTER.println("TIME,LAT,LON,ALT,SPEED,COURSE,SATS,HDOP,BATT,SAT,STAGE,SONAR,ALTPM,ALTGAIN");
+		COMPUTER.println("TimeStamp,Lat,Lon,Alt,Speed,HDG,GPS_SATS,GPS_PRECISION,BATTLVL,IRIDIUM_SATS,INT_TEMP,STAGE");
 		COMPUTER.println("-------------------------.--------------------------.--------------------");		
 		COMPUTER.println("deboff = Debug Off");
 		COMPUTER.println("debon = Debug On");
@@ -1125,9 +1123,10 @@ int computerRequest(String param) {
 		COMPUTER.println("$$$ = Print and send to SAT cloud status string");		
 		COMPUTER.println("-------------------------.--------------------------");
 		}
+		//Todo (Eliminate duplicated code)
 		RADIO.println("-------------------------.--------------------------.--------------------");		
 		RADIO.println("Status Sentence (1hz):");
-		RADIO.println("TIME,LAT,LON,ALT,SPEED,COURSE,SATS,HDOP,BATT,SAT,STAGE,SONAR,ALTPM,ALTGAIN");
+		RADIO.println("TimeStamp,Lat,Lon,Alt,Speed,HDG,GPS_SATS,GPS_PRECISION,BATTLVL,IRIDIUM_SATS,INT_TEMP,STAGE");
 		RADIO.println("-------------------------.--------------------------.--------------------");		
 		RADIO.println("deboff = Debug Off");
 		RADIO.println("debon = Debug On");
