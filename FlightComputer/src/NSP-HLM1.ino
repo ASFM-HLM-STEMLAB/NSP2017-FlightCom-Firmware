@@ -1284,7 +1284,7 @@ String telemetryString() {	 //THIS IS ONE OF THE STRINGS THAT WILL BE SENT FOR T
    String(gpsParser.course.deg(),0) + "," + 
    String(gpsParser.satellites.value()) + "," + 
    String(gpsParser.hdop.value()) +  "," +    
-   String(batteryLevel,0) +  "," + 
+   String(batteryLevel, 0) +  "," + 
    String(satcomSignal) +  "," + 
    String(internalTempC,0) +  "," + 
    missionStageShortString();
