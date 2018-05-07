@@ -1,5 +1,11 @@
-// SLAVE
-
+/*
+ * Project HLM_I2C_SLAVE
+ * Description: HLM1 Master Module for I2C Slaves
+ * Author: ASFM HLM STEM LAB - 2017 Near Space Team
+ * License: MIT Open Source
+ * Date: May/2018
+ */
+ 
 #include <Wire.h>
 
 #include "IntersemaBaro.h"
