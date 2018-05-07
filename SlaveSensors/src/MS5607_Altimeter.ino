@@ -3,11 +3,10 @@
  * Description: HLM1 Altimeter/Temperature/Pressure I2C Module
  * Author: ASFM HLM STEM LAB - 2017 Near Space Team
  * License: MIT Open Source
- * Date: January/2018
+ * Date: May/2018
  */
 
-#include <MS5611.h>
-#include <MS5xxx.h>
+#include "IntersemaBaro.h"
 
 //
 // ALTIMETER/TEMPERATURE/PRESSURE MODULE
@@ -17,7 +16,7 @@
 #include <Wire.h>
 
 // ALTIMETER MODULE: MS5607
-MS5xxx sensor(&Wire);
+Intersema::BaroPressure_MS5607B baro(true);
 
 // temperature storage
 char t[10]; //empty array where to put the numbers going to the master
@@ -43,23 +42,20 @@ void setup() {
 
 void loop() {
 
-  sensor.ReadProm();
-  sensor.Readout();
-  
+  temperature = baro.getTemperature();
   Serial.print("Temperature [0.01 C]: ");
-  Serial.println(sensor.GetTemp());
-  temperature = sensor.GetTemp();
-  
+  Serial.println(temperature);
+
+  pressure = baro.getPressurePascals();
   Serial.print("Pressure [Pa]: ");
-  Serial.println(sensor.GetPres());
-  pressure = sensor.GetPres();
+  Serial.println(pressure);
 
   // store in char arrays
   // dtostrf converts the float variables to a string for I2C. (floatVar, minStringWidthIncDecimalPoint, numVarsAfterDecimal, empty array);
   dtostrf(temperature, 3, 2, t); 
   dtostrf(pressure, 3, 2, p); 
-  
-  test_crc();
+
+  testAlt();
   Serial.println("---");
   
   delay(5000);
@@ -91,15 +87,14 @@ void receiveEvent(int howMany) {
   tOrP = Wire.read();    // receive byte as an integer
 }
 
-void test_crc() {
-  sensor.ReadProm();
-  sensor.Readout(); 
-  Serial.print("CRC=0x");
-  Serial.print(sensor.Calc_CRC4(), HEX);
-  Serial.print(" (should be 0x");
-  Serial.print(sensor.Read_CRC4(), HEX);
-  Serial.print(")\n");
-  Serial.print("Test Code CRC=0x");
-  Serial.print(sensor.CRCcodeTest(), HEX);
-  Serial.println(" (should be 0xB)");
+void testAlt() {
+  long alt = baro.getHeightCentiMeters();
+  long pre = baro.getPressurePascals();
+  long temp = baro.getTemperature();
+  Serial.println("Centimeters:");
+  Serial.println((float)(alt), 2);
+  Serial.println("Pressure (Pa): ");
+  Serial.println((float)(pre), 2);
+  Serial.println("Temperature (C):");
+  Serial.print((float)(temp / 100), 2);
 }
