@@ -8,34 +8,51 @@
 
 #include "TinyGPS++.h"
 #include "Serial5/Serial5.h"
+#include "Serial4/Serial4.h"
+#include "ParticleSoftSerial.h"
 
 //====[SETTINGS]=================================================
 bool cellModemEnabled = true;  //NO CONST!
 bool satModemEnabled = true;  //NO CONST!
 bool cellMuteEnabled = true;   //NO CONST!
+bool sdMuteEnabled = false;   //NO CONST!
 bool satMuteEnabled = true;   //NO CONST!
 
-const float altitudeGainClimbTrigger = 20; //Minimum alt gain after startup to detect climb.
-const float altitudePerMinuteGainClimbTrigger = 100; //ft per minute to detect a climb
-const float altitudeLossPerMinuteForDescentDetection = -150;
-const float iterationsInLowDescentToTriggerRecovery = 20;
-const float minimumAltitudeToTriggerRecovery = 7000; //If above this level we will not trigger recovery (Should we remove this??)
+const float altitudeGainClimbTrigger = 200; //FT Minimum alt gain after startup to detect climb.
+const float altitudePerMinuteGainClimbTrigger = 200; //ft per minute to detect a climb
+const float altitudeLossPerMinuteForDescentDetection = -200;
+const float iterationsInLowDescentToTriggerRecovery = 50;
+const float minimumAltitudeToTriggerRecovery = 10000; //If above this level we will not trigger recovery (Should we remove this??)
 const float minimumSonarDistanceToConfirmRecovery = 1; //Meters
-const uint periodBetweenCellularReports = 20; //Seconds
-const uint periodBetweenSatelliteReports = 30; //Seconds
-const uint periodBetweenSDWriteReports = 5; //Seconds
+const uint periodBetweenCellularReports = 30; //Seconds
+const uint periodBetweenSatelliteReports = 40; //Seconds
+const float minimumBatteryForLEDUse = 70;
+const int anticollisionFlashInterval = 18; //External LED flash ever x seconds (see altitude condition too)
+const float maximumAltitudeForAntiCollision = 38000; // In Feets..
+// const uint periodBetweenSDWriteReports = 5; //Seconds
+// const char *SDFileName = "NSP2017Log.txt";
 bool debugMode = true;  //NO CONST!
 
 //ADC PARAMS FOR SENSOR READINGS
-const int ADC_OVERSAMPLE = 5; //Number of samples to take before making an accurate reading (average)
+const int ADC_OVERSAMPLE = 10; //Number of samples to take before making an accurate reading (average)
 
 
 //SIMULATION SETTINGS >>>>>>
 bool simulationMode = false;
 bool gpsDebugDump = false;
 bool satDebugDump = false;
+bool sdDebugDump = false;
 float simulatedApogeeAltitude = 200;
 //<<<<<<
+
+//EEPROM PARAMETERS FOR REBOOT PERSISTENT ADDRESS >>>>>>
+int eeprom_rebootRecoveryModeAddress = 1;
+uint16_t rebootRecoveryMode = 0; 
+struct RebootRecoveryData {
+	uint8_t version; //eeprom version check
+ 	uint8_t mode;
+ 	float initialGPSAltitude;    
+};
 
 //PARTICLE SYSTEM PARAMS
 SYSTEM_MODE(SEMI_AUTOMATIC);
@@ -46,18 +63,27 @@ SYSTEM_THREAD(ENABLED);
 //====[MACROS]====================================================
 #define GPS Serial1
 #define COMPUTER Serial
+#define SDCARD Serial4
 #define GPSEvent serialEvent1
 #define computerEvent serialEvent
+#define SDCardEvent serialEvent4
 #define SATCOM Serial5
 #define SATCOMEvent serialEvent5
+#define RADIO SoftSer
 #define SATCOMEnablePin D2
+#define EXTSTATUSLEDPin A5
 #define BUZZERPin D4
 #define SONARPin A1
 #define TEMPSENSORPin A0
+#define RADIO_RXPIN A2
+#define RADIO_TXPIN A3
+#define SW0 A5
+#define ANTICOL D1
+
 
 //====[VARIABLES]=================================================
 //## DO NOT MODIFY
-//## 
+//##
 uint celTelemetryTurn = 0;
 uint satTelemetryTurn = 0;
 uint elapsedSeconds = 0;
@@ -66,12 +92,12 @@ uint recoveryDetectionIterations = 0;
 float initialGPSAltitude = -1.0;
 float lastPositiveGPSAltitude = 0.0;
 float lastGPSAltitude = -1.0;
-float altitudePerMinute = 0.0;
+float altitudePerMinute = -1.0;
+float altitudeGain = -1.0;
 float altitudeOfApogee = -1.0;
 float sonarDistance = -1.0; //In Meters
 float internalTempC = -1.0; //In C
 int gpsFixValue = 0;
-
 float simulatedAltitude = 0.0; //For simulation only.
 
 
@@ -88,6 +114,8 @@ int cellSignalRSSI = -1;
 int cellSignalQuality = -1;
 
 String computerSerialData;
+String radioSerialData;
+String SDCardSerialData;
 String satSerialData;
 String lastSatModemRequest = "";
 
@@ -113,6 +141,7 @@ GPSState gpsState = unknown;
 
 TinyGPSCustom gpsFixType(gpsParser, "GPGGA", 6); // $GPGGA fixType decoding from GPS
 
+ParticleSoftSerial SoftSer(RADIO_RXPIN, RADIO_TXPIN); 
 
 //====[PARTICLE CLOUD FNs]=================================
 bool success = Particle.function("c", computerRequest);
@@ -129,15 +158,27 @@ void setup() {
 	//Setup SATCOM
 	pinMode(SATCOMEnablePin, OUTPUT);	
 	pinMode(BUZZERPin, OUTPUT);	
+	pinMode(EXTSTATUSLEDPin, OUTPUT);
+	pinMode(SW0, INPUT_PULLDOWN);
+	pinMode(ANTICOL, OUTPUT);
 	// pinMode(SONARPin, INPUT);
 	digitalWrite(SATCOMEnablePin, HIGH);
 	digitalWrite(BUZZERPin, LOW);
+	digitalWrite(EXTSTATUSLEDPin, LOW);
 	
 
 	//CONNECT TO GPS
 	GPS.begin(57600);
 	//CONNECT TO COMPUTER VIA USB
 	COMPUTER.begin(57600);	
+	//CONNECT TO SDCARD LOGGER
+	SDCARD.begin(115200); //MAKE SURE YOU SET THIS UP IN THE CONFIG.TXT (115200,26,3,0,1,1,0)
+	//CONNECT TO XBEE
+	RADIO.begin(9600);
+	delay(100);
+
+	//INIT SDCARD
+	bootSDCard();
 	//SETUP BATTERY CHARGER 
 	setupBatteryCharger();	
 	//CHANGE LED COLOR
@@ -156,25 +197,35 @@ void setup() {
 	// masterTimer.start();	
 	//READ INITIAL POWER LEFT In Battery
 	updateLocalSensors();	
-	batteryLevel = fuel.getSoC();	
+	batteryLevel = fuel.getSoC();
+	
 	delay(300);
+	initialGPSAltitude = -1;
 	sendToComputer("[Stage] Ground ");
 }
 
+
 void loop() {
 	uint currentTime = millis(); //Get the time since boot.
-	uint currentPeriod = currentTime - lastCycleTime; //Calculate elapsed time since last loop.
+	uint currentPeriod = currentTime - lastCycleTime; //Calculate elapsed time since last loop.	
 
+
+	triggerAntiCollisionLight(currentPeriod);
+	
 
 	if (currentPeriod > 500) { //Every half a second
-		//getExternalSensorData(); //TODO
-		//writeDataToSDCard(); //TODO
-		signalFlareCheck();		
+
+		if (RADIO.available()) {
+			radioEvent();
+		}
+
+		signalFlareCheck();				
 	}
 
 	if (currentPeriod >	1000) { //Every Second
 		elapsedSeconds++;
-		setMissionIndicators();		
+		setMissionIndicators();
+		logDataToSDCard(); //HERE OR IN THE UPPER check?		
 		satcomKeepAlive();
 		sendDataToCloud();				
 		updateStage();
@@ -183,9 +234,56 @@ void loop() {
 		lastCycleTime = currentTime; //Reset lastCycleTime for performing the next cycle calculation.
 	}
 
+
+
 	if (elapsedSeconds >= 240) { elapsedSeconds = 0; } //Prevent overflow
 	
+	
 } 
+
+
+// ==========================================================
+// PERIPHERALS
+// ==========================================================
+void bootSDCard() {
+	delay(100);
+	writeLineToSDCard("[EVENT] System Boot");
+
+	if (Time.isValid() == true) {
+		time_t time = Time.now();  	
+		writeLineToSDCard("TimeStamp: " + Time.format(time, TIME_FORMAT_ISO8601_FULL));
+	} else {
+		writeLineToSDCard("[EVENT] System Boot");
+		writeLineToSDCard("TimeStamp: Not provided by Kernel");
+	}
+
+	delay(200);
+	sendToComputer("[SDCARD] Initialized to append writing");
+
+	checkRebootRecoveryMode();
+}
+
+void checkRebootRecoveryMode() {
+	RebootRecoveryData rebootRecoveryData;
+	EEPROM.get(eeprom_rebootRecoveryModeAddress, rebootRecoveryData);
+
+	if (rebootRecoveryData.version == 0) {		
+		rebootRecoveryMode = rebootRecoveryData.mode;
+	}
+
+
+	if (rebootRecoveryMode == 1) {		
+		initialGPSAltitude = rebootRecoveryData.initialGPSAltitude;
+		cellMuteEnabled = false;
+		satMuteEnabled = false;
+		sdMuteEnabled = false;
+		sendToComputer("[EVENT] >RECOVERY MODE DETECTED<");
+		sendToComputer("[EVENT] RECOVERY ALT: " + String(initialGPSAltitude));
+		writeLineToSDCard("[EVENT] >RECOVERY MODE DETECTED<");
+		writeLineToSDCard("[EVENT] RECOVERY ALT: " + String(initialGPSAltitude));
+	}
+
+}
 
 // ==========================================================
 // PERIODIC TASKS
@@ -199,14 +297,27 @@ void setMissionIndicators() {
 		if (missionStage == descent) { RGB.color(255,215,0); } //Yellow
 		if (missionStage == recovery) { RGB.color(255,0,255); } //Magenta
 
+		bool missionWarningLED = false;
+		if (missionStage == ground) {
+			if (performPreflightCheck() != 1 && batteryLevel >= minimumBatteryForLEDUse) {
+				missionWarningLED = true;
+			}
+		}
 
 		if (elapsedSeconds % 2 == 0 ) { //LEDS					
-			RGB.brightness(0);				
+			RGB.brightness(0);	
+			digitalWrite(EXTSTATUSLEDPin, HIGH);
+			if (missionWarningLED==true) { digitalWrite(EXTSTATUSLEDPin, HIGH); }
 		} else {				
-			if (debugMode == true) {
-				RGB.brightness(100);
+			if (debugMode == true && batteryLevel >= minimumBatteryForLEDUse) {
+				RGB.brightness(100);				
 			}		
+
+			if (missionWarningLED==true) { digitalWrite(EXTSTATUSLEDPin, LOW); } 
 		}
+
+	
+
 }
 
 void satcomKeepAlive() {
@@ -223,23 +334,18 @@ void satcomKeepAlive() {
 
 void sendDataToCloud() {
 	if (elapsedSeconds % periodBetweenCellularReports == 0) { //CELLULAR
-		if (celTelemetryTurn == 0) {
 			sendStatusToCell(); //Send STAT STRING to cloud via CELL if connected..			
-			celTelemetryTurn = 1;
-		} else {
-			sendExtendedDataToCell();
-			celTelemetryTurn = 0;
-		}
+
 	}
 
 	if (elapsedSeconds % periodBetweenSatelliteReports == 0) {	//SATELLITE
-		if (satTelemetryTurn == 0) {
 				sendStatusToSat();
-				satTelemetryTurn = 1;
-			} else {
-				sendExtendedDataToSat();			
-				satTelemetryTurn = 0;
-		}		
+	}
+}
+
+void logDataToSDCard() { //TODO [Set a period for storage]
+	if (sdMuteEnabled == false) {
+		logStatusToSDCard();		
 	}
 }
 
@@ -251,7 +357,7 @@ void updateLocalSensors() {
 
 void doDebugToComputer() {		 	
  	if (debugMode == true && gpsDebugDump == false && satDebugDump == false && simulationMode == false) {
-		sendToComputer(telemetryString());		
+		sendToComputer(SDLogString());		
 	}
 }
 
@@ -265,6 +371,14 @@ void signalFlareCheck() {
 	}
 }
 
+void triggerAntiCollisionLight(uint currentPeriod) {
+	if (currentPeriod > 1000 && (elapsedSeconds % anticollisionFlashInterval == 0) && (lastGPSAltitude < maximumAltitudeForAntiCollision)) {		
+		digitalWrite(ANTICOL, HIGH);		
+	} else {
+		digitalWrite(ANTICOL, LOW);
+	}
+}
+
 
 // ==========================================================
 // STATE MACHINE 
@@ -272,7 +386,7 @@ void signalFlareCheck() {
 void updateStage() {
 
 	float gpsAltitude = gpsParser.altitude.feet() + simulatedAltitude;	
-	float altitudeGain = (gpsAltitude - initialGPSAltitude);
+	altitudeGain = (gpsAltitude - initialGPSAltitude);
 	float altitudeTrend = gpsAltitude - lastGPSAltitude;	
 	altitudePerMinute = altitudeTrend * 60;
 		
@@ -312,33 +426,40 @@ void updateStage() {
 			missionStage = climb;
 			lastPositiveGPSAltitude = gpsAltitude;		
 			sendToComputer("[Stage] Climb Detected at: " + String(gpsAltitude));		
+			writeLineToSDCard("[Stage] Climb Detected at: " + String(gpsAltitude));
 		}
 	}
 
 		if ((missionStage == climb) && (gpsAltitude < lastGPSAltitude) && (gpsAltitude > altitudeOfApogee) && (lastGPSAltitude != -1))  {
 			sendToComputer("[Event] Apogee Reached at " + String(gpsAltitude));		
+			writeLineToSDCard("[Event] Apogee Reached at " + String(gpsAltitude));		
 			altitudeOfApogee = gpsAltitude;
 		}
 			
 		if (missionStage == climb && altitudeTrend < 10 && altitudePerMinute <= altitudeLossPerMinuteForDescentDetection) {
 			missionStage = descent;		
 			sendToComputer("[Stage] Descent Detected at " + String(gpsAltitude));
+			writeLineToSDCard("[Stage] Descent Detected at " + String(gpsAltitude));
 
 		}
 
 		if ((missionStage == descent && altitudePerMinute < 2) && (gpsAltitude <= minimumAltitudeToTriggerRecovery)) {
 			recoveryDetectionIterations++;
 			if (recoveryDetectionIterations >= iterationsInLowDescentToTriggerRecovery) {			
-				missionStage = recovery;			
+				missionStage = recovery;	
+				digitalWrite(BUZZERPin, HIGH);		
 				sendToComputer("[Stage] Recovery Detected at " + String(gpsAltitude));		
+				writeLineToSDCard("[Stage] Recovery Detected at " + String(gpsAltitude));		
 			}
 		}
 	
 
-	if (missionStage == recovery)  {		
+	if (missionStage == recovery)  {
+		//TODO: Add bypass to signalflare
 		if (sonarDistance <= minimumSonarDistanceToConfirmRecovery) {
 			missionStage = recovery_confirmed;
 			sendToComputer("[Stage] Recovery Confirmed at " + String(sonarDistance));
+			writeLineToSDCard("[Stage] Recovery Confirmed at " + String(sonarDistance));
 		}
 	}
 
@@ -380,9 +501,10 @@ float readInternalTemp() {
 }
 
 void setupBatteryCharger() {
-	PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below. 
-	pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
-	pmic.setInputCurrentLimit(2000);
+	PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below. 	
+	pmic.setChargeCurrent(0,0,1,0,0,0);
+	pmic.setInputCurrentLimit(1500);
+	pmic.setChargeVoltage(4208);
 }
 
 // ==========================================================
@@ -459,7 +581,20 @@ void updateGPSFixType() {
 void sendToComputer(String text) {
 	TRY_LOCK(COMPUTER) {	
 		COMPUTER.println(text);
-	}
+	}	
+	sendToRadio(text);
+}
+
+void sendToRadio(String text) {	
+	RADIO.println(text);
+}
+
+void sendToSDCard(String text) {	
+		SDCARD.println(text);	
+}
+
+void writeLineToSDCard(String line) {	
+  	SDCARD.println(line);
 }
 
 
@@ -474,6 +609,7 @@ void SATCOMEvent() {
 				TRY_LOCK(COMPUTER) {
 					COMPUTER.write(c);
 				}
+				RADIO.write(c);
 			}
 			if (c == '\r') {				
 				satSerialData = satSerialData.trim();									
@@ -486,6 +622,7 @@ void SATCOMEvent() {
 					if (satcomAlive == false && satModemEnabled == true && lastSatModemRequest == "AT") {
 						satcomAlive = true;	
 						sendToComputer("[Event] SatCom Alive");	
+						writeLineToSDCard("[Event] SatCom Alive");
 						getSatSignal();
 					}
 					
@@ -506,10 +643,15 @@ void SATCOMEvent() {
 		}	
 }
 
+void SW0Event() 
+{
+	COMPUTER.write("C");
+}
+
 void GPSEvent()
 {	
-	if (GPS.available()) {
-		while (GPS.available()) {			
+	
+		while (GPS.available()) {					
 			char c = GPS.read();			
 			gpsParser.encode(c);
 			if (gpsDebugDump==true && satDebugDump==false) {
@@ -518,13 +660,14 @@ void GPSEvent()
 				}
 			}			
 		}
-	}	
+		
 
 	updateGPSFixType();
 
 	if (gpsState == Fix && initialGPSAltitude==-1 && gpsParser.altitude.feet() > 0) {
 		initialGPSAltitude = gpsParser.altitude.feet();					
 		sendToComputer("[Event] Initial Altitude Set to: " + String(initialGPSAltitude,0));
+		writeLineToSDCard("[Event] Initial Altitude Set to: " + String(initialGPSAltitude,0));
 	}
 }
 
@@ -540,6 +683,38 @@ void computerEvent()
 				computerSerialData = computerSerialData.remove(computerSerialData.indexOf('\n'));
 				computerRequest(computerSerialData);
 				computerSerialData = "";
+			}
+		}
+	}	
+}
+
+void radioEvent() {	
+	if (RADIO.available()) {
+		while (RADIO.available()) {			
+			char c = RADIO.read();
+			radioSerialData = radioSerialData + c;
+			if (c == '\n') {
+				radioSerialData = radioSerialData.remove(radioSerialData.indexOf('\n'));
+				computerRequest(radioSerialData);
+				radioSerialData = "";
+			}
+		}
+	}	
+}
+
+void SDCardEvent()
+{
+	if (SDCARD.available()) {
+		while (SDCARD.available()) {			
+			char c = SDCARD.read();
+			SDCardSerialData = SDCardSerialData + c;
+			if (c == '\r') {
+				if (sdDebugDump == true) {
+					sendToComputer(SDCardSerialData);
+				}
+				
+				SDCardSerialData = SDCardSerialData.remove(SDCardSerialData.indexOf('\n'));				
+				SDCardSerialData = "";
 			}
 		}
 	}	
@@ -576,8 +751,9 @@ int computerRequest(String param) {
 		missionStage = ground;
 		initialGPSAltitude = -1.0;
 		lastPositiveGPSAltitude = 0.0;
+		altitudeGain = -1.0;
 		lastGPSAltitude = -1.0;
-		altitudePerMinute = 0.0;
+		altitudePerMinute = -1.0;
 		altitudeOfApogee = -1.0;
 		simulatedAltitude = 0.0; //For simulation only.
 		sendToComputer("OK");
@@ -615,6 +791,54 @@ int computerRequest(String param) {
 			return 0;
 		}
 	}
+
+	if (param == "sdmute") {
+		sdMuteEnabled = !sdMuteEnabled;
+		if (sdMuteEnabled == true) {
+			sendToComputer("[Event] SDMute Enabled");			
+			return 1;
+		} else {
+			sendToComputer("[Event] SDMute Disabled");
+			return 0;
+		}
+	}
+
+	if (param == "flymode") {
+		cellMuteEnabled = false;
+		satMuteEnabled = false;
+		sdMuteEnabled = false;
+		rebootRecoveryMode = 1;
+
+		RebootRecoveryData rebootRecoveryData;
+		rebootRecoveryData.mode = rebootRecoveryMode;
+		rebootRecoveryData.initialGPSAltitude = initialGPSAltitude;
+		rebootRecoveryData.version = 0;
+		EEPROM.put(eeprom_rebootRecoveryModeAddress, rebootRecoveryData);
+
+		// EEPROM.put(eeprom_rebootRecoveryModeAddress, rebootRecoveryMode);
+		writeLineToSDCard("[EVENT] Fly Mode Armed");
+		sendToComputer("[EVENT] Fly Mode Armed");
+		
+		return 1;
+	}
+
+	if (param == "rigmode") {
+		cellMuteEnabled = true;
+		satMuteEnabled = true;		
+		rebootRecoveryMode = 0;
+		
+		RebootRecoveryData rebootRecoveryData;
+		rebootRecoveryData.mode = rebootRecoveryMode;
+		rebootRecoveryData.initialGPSAltitude = initialGPSAltitude;
+		rebootRecoveryData.version = 0;
+		EEPROM.put(eeprom_rebootRecoveryModeAddress, rebootRecoveryData);
+		writeLineToSDCard("[EVENT] Rig Mode Enabled");
+		sendToComputer("[EVENT] Rig Mode Enabled");
+		return 1;
+	}
+
+
+
 	if (param == "saton") {				
 		setSatModem(true);		
 		return 1;
@@ -641,6 +865,10 @@ int computerRequest(String param) {
 		satDebugDump = !satDebugDump;
 		return 1;
 	}
+	if (param == "sddump") {
+		sdDebugDump = !sdDebugDump;		
+		return 1;
+	}
 	if (param == "querysatsignal") {		
 		sendToComputer("OK");
 		getSatSignal();
@@ -665,10 +893,12 @@ int computerRequest(String param) {
 		digitalWrite(BUZZERPin, LOW);		
 		return 1;
 	}
+
 	if (param == "resetinitialaltitude") {				
 		initialGPSAltitude = gpsParser.altitude.feet();
 		return initialGPSAltitude;
 	}
+
 	if (param == "preflight?") {		
 		return performPreflightCheck();
 	}
@@ -735,6 +965,16 @@ int computerRequest(String param) {
 		return 0;
 	}
 
+	if (param == "flymode?") {	
+		if (rebootRecoveryMode == 1) {
+			sendToComputer("Fly Mode Armed");
+		} else {
+			sendToComputer("Rig Mode Enabled");
+		}
+
+		return rebootRecoveryMode;
+	}
+
 	if (param == "fwversion?") {
 		TRY_LOCK(COMPUTER) {
 			COMPUTER.printlnf("Firmware version: %s", System.version().c_str());
@@ -763,14 +1003,14 @@ int computerRequest(String param) {
 	}
 
 	if (param == "$") {
-		sendToComputer(telemetryString());
+		sendToComputer(SDLogString());
 		return 1;		
 	}
 
-	if (param == "x$") {
-		sendToComputer(exTelemetryString());
-		return 1;		
-	}
+	// if (param == "x$") {
+	// 	sendToComputer(exTelemetryString());
+	// 	return 1;		
+	// }
 
 	if (param == "$$") {	
 		sendToComputer("OK");	
@@ -778,11 +1018,11 @@ int computerRequest(String param) {
 		return 1;		
 	}	
 
-	if (param == "x$$") {	
-		sendToComputer("OK");	
-		sendExtendedDataToCell();
-		return 1;		
-	}	
+	// if (param == "x$$") {	
+	// 	sendToComputer("OK");	
+	// 	sendExtendedDataToCell();
+	// 	return 1;		
+	// }	
 
 	if (param == "$$$") {	
 		sendToComputer("OK");
@@ -792,29 +1032,47 @@ int computerRequest(String param) {
 	}
 
 
-	if (param == "x$$$") {	
-		sendToComputer("OK");
-		sendExtendedDataToSat();
-		return 1;
-	}
-
 	if (param == "$$$$") {	
 		sendToComputer("OK");
 		sendStatusToCell();
-		sendExtendedDataToCell();
+		//sendExtendedDataToCell();
 		sendStatusToSat();
-		sendExtendedDataToSat();
+		//sendExtendedDataToSat();
 		return 1;
+	}
+
+	// if (param == ">ls") {
+	// 	sendToSDCard("new NSP2017Log.txt");
+	// 	sendToComputer("OK");
+	// 	return 1;
+	// }
+
+	if (param == ">cmd") {
+		SDCARD.write(26);
+		SDCARD.write(26);
+		SDCARD.write(26); 
+		delay(100);
+		sendToComputer("OK");
+	}
+
+	if (param == ">init") {
+  		sendToSDCard("init");
+  		sendToComputer("OK");
+	}
+
+	if (param == ">set4") {
+  		sendToSDCard("set");
+  		sendToComputer("OK");
 	}
 
 	
 
 	if (param == "?") {
 		TRY_LOCK(COMPUTER) {
-		COMPUTER.println("-------------------------.--------------------------");		
+		COMPUTER.println("-------------------------.--------------------------.--------------------");		
 		COMPUTER.println("Status Sentence (1hz):");
-		COMPUTER.println("TIME,LAT,LON,ALT,SPEED,COURSE,SATS,HDOP,BATT,SAT,STAGE");
-		COMPUTER.println("-------------------------.--------------------------");		
+		COMPUTER.println("TimeStamp,Lat,Lon,Alt,Speed,HDG,GPS_SATS,GPS_PRECISION,BATTLVL,IRIDIUM_SATS,INT_TEMP,STAGE");
+		COMPUTER.println("-------------------------.--------------------------.--------------------");		
 		COMPUTER.println("deboff = Debug Off");
 		COMPUTER.println("debon = Debug On");
 		COMPUTER.println("simon = Start Simulation");
@@ -826,12 +1084,15 @@ int computerRequest(String param) {
 		COMPUTER.println("celloff = Cell Modem Off");
 		COMPUTER.println("cellmute = Toggle Cell Reporting");
 		COMPUTER.println("satmute = Toggle Sat Reporting");
+		COMPUTER.println("flymode = Set system to fly mode [needed for mission]");
+		COMPUTER.println("rigmode = Toggle Sat Reporting [disbales fly mode]");
 		COMPUTER.println("saton = SAT Modem ON");
 		COMPUTER.println("satoff = SAT Modem Off");
 		COMPUTER.println("comoff = All Comunication systems OFF [cell + sat]");
 		COMPUTER.println("comon = All Comunication systems ON [cell + sat]");
 		COMPUTER.println("gpsdump = GPS Serial Dump to computer toggle");
 		COMPUTER.println("satdump = SATCOM Serial Dump to computer toggle");
+		COMPUTER.println("sddump = SDCARD Serial Dump to computer toggle");
 		COMPUTER.println("querysatsignal = Send a request to the satelite modem to get sat signal");
 		COMPUTER.println("querycellsignal = Send a request to the cellular modem to get RSSI signal");
 		COMPUTER.println("buzzeron = Turn Buzzer ON");
@@ -848,16 +1109,74 @@ int computerRequest(String param) {
 		COMPUTER.println("cloud? = Is cloud available?");
 		COMPUTER.println("satsignal? = 0-5 Satcom signal strength?");		
 		COMPUTER.println("satenabled? = Is the sat modem enabled?");		
+		COMPUTER.println("flymode? = Is the system in fly mode?");		
 		COMPUTER.println("bat? = Get battery level?");	
 		COMPUTER.println("gpsfix? = Get GpsFix ValueType? (0=NoFix,1=Fix,2=DGPSFix)");
 		COMPUTER.println("sonar? = Get the sonar distance in meters. (cm for cell)");
 		COMPUTER.println("temp? = Get the internal (onboard) temperature in C");
 		COMPUTER.println("fwversion? = OS Firmware Version?");		
+		COMPUTER.println(">cmd = Set SD to Command Mode");		
+		COMPUTER.println(">init = Force Initialize");			
+		COMPUTER.println(">set = Enter set Menu");
 		COMPUTER.println("$ = Print status string");		
 		COMPUTER.println("$$ = Print and send to CELL cloud status string");		
 		COMPUTER.println("$$$ = Print and send to SAT cloud status string");		
 		COMPUTER.println("-------------------------.--------------------------");
 		}
+		//Todo (Eliminate duplicated code)
+		RADIO.println("-------------------------.--------------------------.--------------------");		
+		RADIO.println("Status Sentence (1hz):");
+		RADIO.println("TimeStamp,Lat,Lon,Alt,Speed,HDG,GPS_SATS,GPS_PRECISION,BATTLVL,IRIDIUM_SATS,INT_TEMP,STAGE");
+		RADIO.println("-------------------------.--------------------------.--------------------");		
+		RADIO.println("deboff = Debug Off");
+		RADIO.println("debon = Debug On");
+		RADIO.println("simon = Start Simulation");
+		RADIO.println("simoff = Stop Simulation");
+		RADIO.println("reset = Set mission to ground mode");
+		RADIO.println("reboot = Reboot Flight Computer");
+		RADIO.println("simon = Start Simulation");
+		RADIO.println("cellon = Cell Modem On");
+		RADIO.println("celloff = Cell Modem Off");
+		RADIO.println("cellmute = Toggle Cell Reporting");
+		RADIO.println("satmute = Toggle Sat Reporting");
+		RADIO.println("flymode = Set system to fly mode [needed for mission]");
+		RADIO.println("rigmode = Toggle Sat Reporting [disbales fly mode]");
+		RADIO.println("saton = SAT Modem ON");
+		RADIO.println("satoff = SAT Modem Off");
+		RADIO.println("comoff = All Comunication systems OFF [cell + sat]");
+		RADIO.println("comon = All Comunication systems ON [cell + sat]");
+		RADIO.println("gpsdump = GPS Serial Dump to computer toggle");
+		RADIO.println("satdump = SATCOM Serial Dump to computer toggle");
+		RADIO.println("sddump = SDCARD Serial Dump to computer toggle");
+		RADIO.println("querysatsignal = Send a request to the satelite modem to get sat signal");
+		RADIO.println("querycellsignal = Send a request to the cellular modem to get RSSI signal");
+		RADIO.println("buzzeron = Turn Buzzer ON");
+		RADIO.println("buzzeroff = Turn Buzzer ON");
+		RADIO.println("buzzerchirp = Chirp the buzzer");
+		RADIO.println("resetinitialaltitude = Set the initial altitude to current altitude");
+		RADIO.println("preflight? = Go no Go for launch");
+		RADIO.println("initialaltitude? = Get the initial altitude set uppon gps fix");
+		RADIO.println("vsi? = Vertical Speed?");
+		RADIO.println("alt? = Altitude in feet?");
+		RADIO.println("cell? = Cell Status?");		
+		RADIO.println("cellconnecting? = Cell Modem attempting to connect?");
+		RADIO.println("cellsignal? = Cell Signal Strength [RSSI,QUAL] ?");
+		RADIO.println("cloud? = Is cloud available?");
+		RADIO.println("satsignal? = 0-5 Satcom signal strength?");		
+		RADIO.println("satenabled? = Is the sat modem enabled?");		
+		RADIO.println("flymode? = Is the system in fly mode?");		
+		RADIO.println("bat? = Get battery level?");	
+		RADIO.println("gpsfix? = Get GpsFix ValueType? (0=NoFix,1=Fix,2=DGPSFix)");
+		RADIO.println("sonar? = Get the sonar distance in meters. (cm for cell)");
+		RADIO.println("temp? = Get the internal (onboard) temperature in C");
+		RADIO.println("fwversion? = OS Firmware Version?");		
+		RADIO.println(">cmd = Set SD to Command Mode");		
+		RADIO.println(">init = Force Initialize");			
+		RADIO.println(">set = Enter set Menu");
+		RADIO.println("$ = Print status string");		
+		RADIO.println("$$ = Print and send to CELL cloud status string");		
+		RADIO.println("$$$ = Print and send to SAT cloud status string");		
+		RADIO.println("-------------------------.--------------------------");
 	}
 
 	return -99;
@@ -865,59 +1184,60 @@ int computerRequest(String param) {
 
 int performPreflightCheck() {
 		if (initialGPSAltitude == -1) {
-			sendToComputer("NO GO - MISSING INITIAL ALTITUDE");
+			// sendToComputer("NO GO - MISSING INITIAL ALTITUDE");
 			return -1;
 		}
 		
 		if (missionStage != ground) {
-			sendToComputer("NO GO - STAGE NOT IN GOUND MODE");
+			// sendToComputer("NO GO - STAGE NOT IN GOUND MODE");
 			return -2;
 		}
 
 		if (gpsParser.hdop.value() > 300) {
-			sendToComputer("NO GO - GPS PRECISION OUT OF RANGE");
+			// sendToComputer("NO GO - GPS PRECISION OUT OF RANGE");
 			return -3;
 		}
 
 		if (gpsState != Fix) {
-			sendToComputer("NO GO - GPS DOES NOT HAVE FIX");
+			// sendToComputer("NO GO - GPS DOES NOT HAVE FIX");
 			return -4;
 		}
 
 
 		if (batteryLevel < 80) {
-			sendToComputer("NO GO - LOW BATTERY FOR LAUNCH");
+			// sendToComputer("NO GO - LOW BATTERY FOR LAUNCH");
 			return -5;	
 		}
 
 		if (sonarDistance > 10) {
-			sendToComputer("NO GO - SONAR TEST FAILED");
+			// sendToComputer("NO GO - SONAR TEST FAILED");
 			return -6;	
 		}	
 
 
 		if (satModemEnabled == false) {
-			sendToComputer("NO GO - SAT MODEM IS OFF");
+			// sendToComputer("NO GO - SAT MODEM IS OFF");
 			return -7;	
 		}
 
 		if (cellModemEnabled == false) {
-			sendToComputer("NO GO - CELL MODEM IS OFF");
+			// sendToComputer("NO GO - CELL MODEM IS OFF");
 			return -8;	
 		}
 
-		if (satcomSignal < 3) {
-			sendToComputer("NO GO - NOT ENOUGH SATCOM SATS FOR LAUNCH");
+		if (satcomSignal < 2) {
+			// sendToComputer("NO GO - NOT ENOUGH SATCOM SATS FOR LAUNCH");
 			return -9;	
 		}
 
 		getCellSignal();
 		if (cellSignalRSSI <= 0 || cellSignalQuality <= 0) {
-			sendToComputer("NO GO - NOT ENOUGH CELL SIGNAL FOR LAUNCH");
+			// sendToComputer("NO GO - NOT ENOUGH CELL SIGNAL FOR LAUNCH");
 			return -10;	
 		}
 
-		sendToComputer("GO FOR LAUNCH");
+		// sendToComputer("[System] GO FOR LAUNCH");
+		// writeLineToSDCard("[System] GO FOR LAUNCH");
 		return 1;
 }
 
@@ -937,29 +1257,34 @@ void sendStatusToSat() {
 	}
 }
 
-void sendExtendedDataToSat() {
-	if (satMuteEnabled == false) {	
-		sendTextToSat(exTelemetryString());
-	}
+void logStatusToSDCard() {
+	writeLineToSDCard(SDLogString());
 }
 
-void sendExtendedDataToCell() {
-	if (Particle.connected() == true && cellMuteEnabled == false) { 		
-		Particle.publish("S",exTelemetryString());
-	}
-}
+
+// void sendExtendedDataToSat() {
+// 	if (satMuteEnabled == false) {	
+// 		sendTextToSat(exTelemetryString());
+// 	}
+// }
+
+// void sendExtendedDataToCell() {
+// 	if (Particle.connected() == true && cellMuteEnabled == false) { 		
+// 		Particle.publish("S",exTelemetryString());
+// 	}
+// }
 
 String telemetryString() {	 //THIS IS ONE OF THE STRINGS THAT WILL BE SENT FOR TELEMETRY	
 	//A MESSAGE = TimeStamp, Lat, Lon, Alt, Speed, HDG, GPS_SATS, GPS_PRECISION, BATTLVL, IRIDIUM_SATS, INT_TEMP, STAGE
 	String value =  "A," + gpsTimeStamp() + "," + 
-  String(gpsParser.location.lat(), 4) + "," + 
-  String(gpsParser.location.lng(), 4) + "," + 
+  String(gpsParser.location.lat(), 6) + "," + 
+  String(gpsParser.location.lng(), 6) + "," + 
   String(gpsParser.altitude.feet(),0) + "," + 
   String(gpsParser.speed.knots(),0) + "," +
    String(gpsParser.course.deg(),0) + "," + 
    String(gpsParser.satellites.value()) + "," + 
    String(gpsParser.hdop.value()) +  "," +    
-   String(batteryLevel/10,0) +  "," + 
+   String(batteryLevel, 0) +  "," + 
    String(satcomSignal) +  "," + 
    String(internalTempC,0) +  "," + 
    missionStageShortString();
@@ -967,20 +1292,41 @@ String telemetryString() {	 //THIS IS ONE OF THE STRINGS THAT WILL BE SENT FOR T
    return value;
 }
 
-String exTelemetryString() {	 //THIS IS THE ALTERNATE STRING THAT WILL BE SENT 
-  //B MESSAGE = TimeStamp, Lat, Lon, Alt, ExtTemp, ExtHum, ExtPress
-  String value = "B," + gpsTimeStamp() + "," + 
-  String(gpsParser.location.lat(), 4) + "," + 
-  String(gpsParser.location.lng(), 4) + "," + 
-  String(gpsParser.altitude.feet(),0) + "," +
-  String(0) + "," + 
-  String(0) + "," + 
-  String(0) + "," + 
-  missionStageShortString();
+// String exTelemetryString() {	 //THIS IS THE ALTERNATE STRING THAT WILL BE SENT 
+//   //B MESSAGE = TimeStamp, Lat, Lon, Alt, ExtTemp, ExtHum, ExtPress
+//   String value = "B," + gpsTimeStamp() + "," + 
+//   String(gpsParser.location.lat(), 6) + "," + 
+//   String(gpsParser.location.lng(), 6) + "," + 
+//   String(gpsParser.altitude.feet(),0) + "," +
+//   String(0) + "," + 
+//   String(0) + "," + 
+//   String(0) + "," + 
+//   missionStageShortString();
 
 
-  return value;
-  //TODO (ADD EXTENDED TELEMETRY DATA)
+//   return value;
+//   //TODO (ADD EXTENDED TELEMETRY DATA)
+// }
+
+
+String SDLogString() {
+	String value =  gpsTimeStamp() + "," + 
+	String(gpsParser.location.lat(), 6) + "," + 
+	String(gpsParser.location.lng(), 6) + "," + 
+	String(gpsParser.altitude.feet(),0) + "," + 
+	String(gpsParser.speed.knots(),0) + "," +
+	String(gpsParser.course.deg(),0) + "," + 
+	String(gpsParser.satellites.value()) + "," + 
+	String(gpsParser.hdop.value()) +  "," +    
+	String(batteryLevel,0) +  "," + 
+	String(satcomSignal) +  "," + 
+	String(internalTempC,0) +  "," + 
+	String(sonarDistance,0) +  "," + 
+	String(altitudePerMinute,0) +  "," + 
+	String(altitudeGain,0) +  "," + 
+	missionStageShortString();
+
+	return value;
 }
 
 void setCellModem(bool value) {		
