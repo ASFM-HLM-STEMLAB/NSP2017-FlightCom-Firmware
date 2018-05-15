@@ -227,7 +227,8 @@ void loop() {
 		setMissionIndicators();
 		logDataToSDCard(); //HERE OR IN THE UPPER check?		
 		satcomKeepAlive();
-		sendDataToCloud();				
+		sendDataToCloud();
+		sendDataToRadio();
 		updateStage();
 		updateLocalSensors();
 		doDebugToComputer();					
@@ -334,13 +335,17 @@ void satcomKeepAlive() {
 
 void sendDataToCloud() {
 	if (elapsedSeconds % periodBetweenCellularReports == 0) { //CELLULAR
-			sendStatusToCell(); //Send STAT STRING to cloud via CELL if connected..			
+		sendStatusToCell(); //Send STAT STRING to cloud via CELL if connected..			
 
 	}
 
 	if (elapsedSeconds % periodBetweenSatelliteReports == 0) {	//SATELLITE
-				sendStatusToSat();
+		sendStatusToSat();
 	}
+}
+
+void sendDataToRadio() {
+	sendToRadio(telemetryString());
 }
 
 void logDataToSDCard() { //TODO [Set a period for storage]
@@ -581,12 +586,16 @@ void updateGPSFixType() {
 void sendToComputer(String text) {
 	TRY_LOCK(COMPUTER) {	
 		COMPUTER.println(text);
-	}	
-	sendToRadio(text);
+	}		
 }
 
 void sendToRadio(String text) {	
 	RADIO.println(text);
+}
+
+void sendToComputerAndRadio(String text) {
+	sendToComputer(text);
+	sendToRadio(text);
 }
 
 void sendToSDCard(String text) {	
@@ -721,6 +730,7 @@ void SDCardEvent()
 }
 
 
+
 // ==========================================================
 // REMOTE CONTROL
 // ==========================================================
@@ -728,22 +738,22 @@ int computerRequest(String param) {
 	
 	if  (param == "deboff") {
 		debugMode = false;
-		sendToComputer("OK");
+		sendToComputerAndRadio("OK");		
 		return 1;
 	}
 	if  (param == "debon") {
 		debugMode = true;
-		sendToComputer("OK");
+		sendToComputerAndRadio("OK");
 		return 1;
 	}
 	if  (param == "simon") {
 		simulationMode = true;		
-		sendToComputer("OK");
+		sendToComputerAndRadio("OK");
 		return 1;
 	}
 	if  (param == "simoff") {
 		simulationMode = false;
-		sendToComputer("OK");
+		sendToComputerAndRadio("OK");
 		return 1;
 	}
 	if  (param == "reset") {
@@ -756,11 +766,11 @@ int computerRequest(String param) {
 		altitudePerMinute = -1.0;
 		altitudeOfApogee = -1.0;
 		simulatedAltitude = 0.0; //For simulation only.
-		sendToComputer("OK");
+		sendToComputerAndRadio("OK");
 		return 1;
 	}
 	if (param == "reboot") {
-		sendToComputer("OK");
+		sendToComputerAndRadio("OK");
 		System.reset();		
 	}
 	if (param == "cellon") {				
@@ -774,20 +784,20 @@ int computerRequest(String param) {
 	if (param == "cellmute") {
 		cellMuteEnabled = !cellMuteEnabled;
 		if (cellMuteEnabled == true) {
-			sendToComputer("[Event] CellMute Enabled");
+			sendToComputerAndRadio("[Event] CellMute Enabled");
 			return 1;
 		} else {
-			sendToComputer("[Event] CellMute Disabled");
+			sendToComputerAndRadio("[Event] CellMute Disabled");
 			return 0;
 		}
 	}
 	if (param == "satmute") {
 		satMuteEnabled = !satMuteEnabled;
 		if (satMuteEnabled == true) {
-			sendToComputer("[Event] SatMute Enabled");
+			sendToComputerAndRadio("[Event] SatMute Enabled");
 			return 1;
 		} else {
-			sendToComputer("[Event] SatMute Disabled");
+			sendToComputerAndRadio("[Event] SatMute Disabled");
 			return 0;
 		}
 	}
@@ -795,10 +805,10 @@ int computerRequest(String param) {
 	if (param == "sdmute") {
 		sdMuteEnabled = !sdMuteEnabled;
 		if (sdMuteEnabled == true) {
-			sendToComputer("[Event] SDMute Enabled");			
+			sendToComputerAndRadio("[Event] SDMute Enabled");			
 			return 1;
 		} else {
-			sendToComputer("[Event] SDMute Disabled");
+			sendToComputerAndRadio("[Event] SDMute Disabled");
 			return 0;
 		}
 	}
@@ -817,7 +827,7 @@ int computerRequest(String param) {
 
 		// EEPROM.put(eeprom_rebootRecoveryModeAddress, rebootRecoveryMode);
 		writeLineToSDCard("[EVENT] Fly Mode Armed");
-		sendToComputer("[EVENT] Fly Mode Armed");
+		sendToComputerAndRadio("[EVENT] Fly Mode Armed");
 		
 		return 1;
 	}
@@ -833,7 +843,7 @@ int computerRequest(String param) {
 		rebootRecoveryData.version = 0;
 		EEPROM.put(eeprom_rebootRecoveryModeAddress, rebootRecoveryData);
 		writeLineToSDCard("[EVENT] Rig Mode Enabled");
-		sendToComputer("[EVENT] Rig Mode Enabled");
+		sendToComputerAndRadio("[EVENT] Rig Mode Enabled");
 		return 1;
 	}
 
@@ -904,72 +914,72 @@ int computerRequest(String param) {
 	}
 
 	if (param == "initialaltitude?") {		
-		sendToComputer(String(initialGPSAltitude));
+		sendToComputerAndRadio(String(initialGPSAltitude));
 		return initialGPSAltitude;
 	}		
 	if  (param == "vsi?") {
-		sendToComputer(String(altitudePerMinute));	
+		sendToComputerAndRadio(String(altitudePerMinute));	
 		return (int)altitudePerMinute;		
 	}
 	if  (param == "alt?") {
-		sendToComputer(String(lastGPSAltitude));
+		sendToComputerAndRadio(String(lastGPSAltitude));
 		return (int)lastGPSAltitude;	
 	}
 	if  (param == "apogee?") {
-		sendToComputer(String(altitudeOfApogee));
+		sendToComputerAndRadio(String(altitudeOfApogee));
 		return (int)altitudeOfApogee;
 	}
 	if  (param == "stage?") {
-		sendToComputer(missionStageShortString());
+		sendToComputerAndRadio(missionStageShortString());
 		return missionStage;
 	}	
 	if  (param == "cell?") {
 		if (Cellular.ready() == true) { 
-			sendToComputer("YES");
+			sendToComputerAndRadio("YES");
 		} else {
-			sendToComputer("NO");
+			sendToComputerAndRadio("NO");
 		}
 	}	
 	if  (param == "cellconnecting?") {
 		if (Cellular.connecting() == true) { 
-			sendToComputer("YES");
+			sendToComputerAndRadio("YES");
 		} else {
-			sendToComputer("NO");
+			sendToComputerAndRadio("NO");
 		}
 	}
 	if  (param == "cellsignal?") {		
 		CellularSignal sig = Cellular.RSSI();		
-		sendToComputer(sig);
+		sendToComputerAndRadio(sig);
 		return sig.rssi;		
 	}	
 
 	if  (param == "cloud?") {
 		if (Particle.connected() == true) { 
-			sendToComputer("YES");			
+			sendToComputerAndRadio("YES");			
 		} else {
-			sendToComputer("NO");
+			sendToComputerAndRadio("NO");
 		}
 	}	
 	
 	if  (param == "satsignal?") {
-		sendToComputer(String(satcomSignal));
+		sendToComputerAndRadio(String(satcomSignal));
 		return satcomSignal;
 	}	
 
 	if  (param == "satenabled?") {
 		if (satModemEnabled) {
-			sendToComputer("YES");
+			sendToComputerAndRadio("YES");
 			return 1;
 		}
-		sendToComputer("NO");
+		sendToComputerAndRadio("NO");
 		return 0;
 	}
 
 	if (param == "flymode?") {	
 		if (rebootRecoveryMode == 1) {
-			sendToComputer("Fly Mode Armed");
+			sendToComputerAndRadio("Fly Mode Armed");
 		} else {
-			sendToComputer("Rig Mode Enabled");
+			sendToComputerAndRadio("Rig Mode Enabled");
 		}
 
 		return rebootRecoveryMode;
@@ -983,33 +993,33 @@ int computerRequest(String param) {
 	}
 
 	if (param == "bat?") {
-		sendToComputer(String(batteryLevel));		
+		sendToComputerAndRadio(String(batteryLevel));		
 		return batteryLevel;
 	}
 
 	if (param == "gpsfix?") {
-		sendToComputer(String(gpsFixValue));
+		sendToComputerAndRadio(String(gpsFixValue));
 		return gpsFixValue;
 	}
 
 	if (param == "sonar?") {
-		sendToComputer(String(sonarDistance) + " meters");
+		sendToComputerAndRadio(String(sonarDistance) + " meters");
 		return int(sonarDistance*100); //meters to centimeters and int
 	}
 
 	if (param == "temp?") {
-		sendToComputer(String(internalTempC) + " C");
+		sendToComputerAndRadio(String(internalTempC) + " C");
 		return int(internalTempC); //meters to centimeters and int
 	}
 
 	if (param == "$") {
-		sendToComputer(SDLogString());
+		sendToComputerAndRadio(SDLogString());
 		return 1;		
 	}
 
 
 	if (param == "$$") {	
-		sendToComputer("OK");	
+		sendToComputerAndRadio("OK");	
 		sendStatusToCell();		
 		return 1;		
 	}	
@@ -1021,7 +1031,7 @@ int computerRequest(String param) {
 	// }	
 
 	if (param == "$$$") {	
-		sendToComputer("OK");
+		sendToComputerAndRadio("OK");
 		sendStatusToSat();
 		sendStatusToCell();
 		return 1;
@@ -1029,7 +1039,7 @@ int computerRequest(String param) {
 
 
 	if (param == "$$$$") {	
-		sendToComputer("OK");
+		sendToComputerAndRadio("OK");
 		sendStatusToCell();
 		//sendExtendedDataToCell();
 		sendStatusToSat();
@@ -1048,17 +1058,17 @@ int computerRequest(String param) {
 		SDCARD.write(26);
 		SDCARD.write(26); 
 		delay(100);
-		sendToComputer("OK");
+		sendToComputerAndRadio("OK");
 	}
 
 	if (param == ">init") {
   		sendToSDCard("init");
-  		sendToComputer("OK");
+  		sendToComputerAndRadio("OK");
 	}
 
 	if (param == ">set4") {
   		sendToSDCard("set");
-  		sendToComputer("OK");
+  		sendToComputerAndRadio("OK");
 	}
 
 	
@@ -1246,7 +1256,6 @@ void sendStatusToCell() {
 	}
 }
 
-
 void sendStatusToSat() {
 	if (satMuteEnabled == false) {	
 		sendTextToSat(telemetryString());
@@ -1269,9 +1278,6 @@ String telemetryString() {	 //THIS IS ONE OF THE STRINGS THAT WILL BE SENT FOR T
 	String(batteryLevel,0) +  "," + 
 	String(satcomSignal) +  "," + 
 	String(internalTempC,0) +  "," + 
-	String(sonarDistance,0) +  "," + 
-	String(altitudePerMinute,0) +  "," + 
-	String(altitudeGain,0) +  "," + 
 	missionStageShortString();
 
    return value;
