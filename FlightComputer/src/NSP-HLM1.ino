@@ -357,7 +357,7 @@ void updateLocalSensors() {
 
 void doDebugToComputer() {		 	
  	if (debugMode == true && gpsDebugDump == false && satDebugDump == false && simulationMode == false) {
-		sendToComputer(SDLogString());		
+		sendToComputer(telemetryString());
 	}
 }
 
@@ -1007,10 +1007,6 @@ int computerRequest(String param) {
 		return 1;		
 	}
 
-	// if (param == "x$") {
-	// 	sendToComputer(exTelemetryString());
-	// 	return 1;		
-	// }
 
 	if (param == "$$") {	
 		sendToComputer("OK");	
@@ -1261,52 +1257,25 @@ void logStatusToSDCard() {
 	writeLineToSDCard(SDLogString());
 }
 
-
-// void sendExtendedDataToSat() {
-// 	if (satMuteEnabled == false) {	
-// 		sendTextToSat(exTelemetryString());
-// 	}
-// }
-
-// void sendExtendedDataToCell() {
-// 	if (Particle.connected() == true && cellMuteEnabled == false) { 		
-// 		Particle.publish("S",exTelemetryString());
-// 	}
-// }
-
 String telemetryString() {	 //THIS IS ONE OF THE STRINGS THAT WILL BE SENT FOR TELEMETRY	
-	//A MESSAGE = TimeStamp, Lat, Lon, Alt, Speed, HDG, GPS_SATS, GPS_PRECISION, BATTLVL, IRIDIUM_SATS, INT_TEMP, STAGE
-	String value =  "A," + gpsTimeStamp() + "," + 
-  String(gpsParser.location.lat(), 6) + "," + 
-  String(gpsParser.location.lng(), 6) + "," + 
-  String(gpsParser.altitude.feet(),0) + "," + 
-  String(gpsParser.speed.knots(),0) + "," +
-   String(gpsParser.course.deg(),0) + "," + 
-   String(gpsParser.satellites.value()) + "," + 
-   String(gpsParser.hdop.value()) +  "," +    
-   String(batteryLevel, 0) +  "," + 
-   String(satcomSignal) +  "," + 
-   String(internalTempC,0) +  "," + 
-   missionStageShortString();
+	String value = gpsTimeStamp() + "," + 
+	String(gpsParser.location.lat(), 6) + "," + 
+	String(gpsParser.location.lng(), 6) + "," + 
+	String(gpsParser.altitude.feet(),0) + "," + 
+	String(gpsParser.speed.knots(),0) + "," +
+	String(gpsParser.course.deg(),0) + "," + 
+	String(gpsParser.satellites.value()) + "," + 
+	String(gpsParser.hdop.value()) +  "," +    
+	String(batteryLevel,0) +  "," + 
+	String(satcomSignal) +  "," + 
+	String(internalTempC,0) +  "," + 
+	String(sonarDistance,0) +  "," + 
+	String(altitudePerMinute,0) +  "," + 
+	String(altitudeGain,0) +  "," + 
+	missionStageShortString();
 
    return value;
 }
-
-// String exTelemetryString() {	 //THIS IS THE ALTERNATE STRING THAT WILL BE SENT 
-//   //B MESSAGE = TimeStamp, Lat, Lon, Alt, ExtTemp, ExtHum, ExtPress
-//   String value = "B," + gpsTimeStamp() + "," + 
-//   String(gpsParser.location.lat(), 6) + "," + 
-//   String(gpsParser.location.lng(), 6) + "," + 
-//   String(gpsParser.altitude.feet(),0) + "," +
-//   String(0) + "," + 
-//   String(0) + "," + 
-//   String(0) + "," + 
-//   missionStageShortString();
-
-
-//   return value;
-//   //TODO (ADD EXTENDED TELEMETRY DATA)
-// }
 
 
 String SDLogString() {
