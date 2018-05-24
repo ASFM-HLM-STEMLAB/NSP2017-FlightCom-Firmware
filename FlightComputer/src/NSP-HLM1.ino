@@ -3,13 +3,14 @@
  * Description: HLM1 High Altitude Weather Balloon Flight Computer
  * Author: ASFM HLM STEM LAB - 2017 Near Space Team
  * License: MIT Open Source
- * Date: October/2017
+ * Date: May/2018
  */
 
 #include "TinyGPS++.h"
 #include "Serial5/Serial5.h"
 #include "Serial4/Serial4.h"
 #include "ParticleSoftSerial.h"
+#include "Wire.h"
 
 //====[SETTINGS]=================================================
 bool cellModemEnabled = true;  //NO CONST!
@@ -79,6 +80,7 @@ SYSTEM_THREAD(ENABLED);
 #define RADIO_TXPIN A3
 #define SW0 A5
 #define ANTICOL D1
+#define SENSORCOMP Wire1
 
 
 //====[VARIABLES]=================================================
@@ -97,6 +99,10 @@ float altitudeGain = -1.0;
 float altitudeOfApogee = -1.0;
 float sonarDistance = -1.0; //In Meters
 float internalTempC = -1.0; //In C
+float ext_TempAnalogC = -1.0; //In C (From remote unit)
+float ext_TempDigitalC = -1.0; //In C (From remote unit)
+float ext_HumidityDigital = -1.0; //In C (From remote unit)
+float ext_Pressure = -1.0; //
 int gpsFixValue = 0;
 float simulatedAltitude = 0.0; //For simulation only.
 
@@ -117,6 +123,7 @@ String computerSerialData;
 String radioSerialData;
 String SDCardSerialData;
 String satSerialData;
+String sensorCompData;
 String lastSatModemRequest = "";
 
 
@@ -166,7 +173,8 @@ void setup() {
 	digitalWrite(BUZZERPin, LOW);
 	digitalWrite(EXTSTATUSLEDPin, LOW);
 	
-
+	//JOIN  WIRE NETWORK AS MASTER
+	SENSORCOMP.begin();
 	//CONNECT TO GPS
 	GPS.begin(57600);
 	//CONNECT TO COMPUTER VIA USB
@@ -204,6 +212,47 @@ void setup() {
 	sendToComputer("[Stage] Ground ");
 }
 
+void reqSesnorCompUpdate() {
+		SENSORCOMP.requestFrom(1, 17); //Request data from external sensor slave unit.		 
+}
+
+void sensorCompEvent() {
+		while(SENSORCOMP.available()){   
+    		char c = SENSORCOMP.read();
+    		sensorCompData = sensorCompData + c;    		
+  		} 
+  		decodeRemoteSensorData();
+}
+
+void decodeRemoteSensorData() {
+		// Serial.println("[Event] i2C Event : " + sensorCompData);
+
+		 String dTemp = getValue(sensorCompData, ',', 0);
+		 String dHum = getValue(sensorCompData, ',', 1);
+		 String aTemp = getValue(sensorCompData, ',', 2);
+
+		 ext_TempDigitalC = dTemp.toFloat();
+		 ext_HumidityDigital = dHum.toFloat();
+		 ext_TempAnalogC = aTemp.toFloat();		 
+		
+  		sensorCompData = "";
+}
+
+String getValue(String data, char separator, int index)
+{
+    int found = 0;
+    int strIndex[] = { 0, -1 };
+    int maxIndex = data.length() - 1;
+
+    for (int i = 0; i <= maxIndex && found <= index; i++) {
+        if (data.charAt(i) == separator || i == maxIndex) {
+            found++;
+            strIndex[0] = strIndex[1] + 1;
+            strIndex[1] = (i == maxIndex) ? i+1 : i;
+        }
+    }
+    return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
+}
 
 void loop() {
 	uint currentTime = millis(); //Get the time since boot.
@@ -214,11 +263,16 @@ void loop() {
 	
 
 	if (currentPeriod > 500) { //Every half a second
+		reqSesnorCompUpdate();
 
 		if (RADIO.available()) {
 			radioEvent();
 		}
 
+		if (SENSORCOMP.available()) {
+			sensorCompEvent();
+		}
+	
 		signalFlareCheck();				
 	}
 
@@ -1278,9 +1332,13 @@ String telemetryString() {	 //THIS IS ONE OF THE STRINGS THAT WILL BE SENT FOR T
 	String(batteryLevel,0) +  "," + 
 	String(satcomSignal) +  "," + 
 	String(internalTempC,0) +  "," + 
+	String(ext_TempDigitalC,1) +  "," + 
+	String(ext_HumidityDigital,0) +  "," +
+	String(ext_TempAnalogC,1) +  "," + 
+	String(ext_Pressure,0) +  "," + 
 	missionStageShortString();
 
-   return value;
+    return value;
 }
 
 
@@ -1295,7 +1353,11 @@ String SDLogString() {
 	String(gpsParser.hdop.value()) +  "," +    
 	String(batteryLevel,0) +  "," + 
 	String(satcomSignal) +  "," + 
-	String(internalTempC,0) +  "," + 
+	String(internalTempC,2) +  "," +
+	String(ext_TempDigitalC,2) +  "," + 
+	String(ext_HumidityDigital,2) +  "," + 
+	String(ext_TempAnalogC,2) +  "," + 	 
+	String(ext_Pressure,2) +  "," + 
 	String(sonarDistance,0) +  "," + 
 	String(altitudePerMinute,0) +  "," + 
 	String(altitudeGain,0) +  "," + 
