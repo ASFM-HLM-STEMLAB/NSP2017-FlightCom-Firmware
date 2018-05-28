@@ -59,8 +59,10 @@ void loop() {
 	}
 
 	if (seconds % 12 == 0) {
-		seconds++;		
-		sendToCloud(lastMessage);
+		seconds++;	
+		if (Particle.connected() == true) {	
+			sendToCloud(lastMessage);
+		}
 	}
 
 }

@@ -11,6 +11,7 @@
 #include "Serial4/Serial4.h"
 #include "ParticleSoftSerial.h"
 #include "Wire.h"
+#include "IntersemaBaro.h"
 
 //====[SETTINGS]=================================================
 bool cellModemEnabled = true;  //NO CONST!
@@ -120,6 +121,10 @@ bool satcomAlive = false;
 int cellSignalRSSI = -1;
 int cellSignalQuality = -1;
 
+
+// ALTIMETER MODULE: MS5607
+Intersema::BaroPressure_MS5607B baro(true);
+
 String computerSerialData;
 String radioSerialData;
 String SDCardSerialData;
@@ -184,7 +189,9 @@ void setup() {
 	SDCARD.begin(115200); //MAKE SURE YOU SET THIS UP IN THE CONFIG.TXT (115200,26,3,0,1,1,0)
 	//CONNECT TO XBEE
 	RADIO.begin(9600);
+	baro.init();
 	delay(100);
+	
 
 	//INIT SDCARD
 	bootSDCard();
@@ -286,8 +293,9 @@ void loop() {
 		updateStage();
 		updateLocalSensors();
 		doDebugToComputer();
-		sendDataToRadio();					
-		lastCycleTime = currentTime; //Reset lastCycleTime for performing the next cycle calculation.		
+		sendDataToRadio();
+		getBaroData();
+		lastCycleTime = currentTime; //Reset lastCycleTime for performing the next cycle calculation.				 
 	}
 
 
@@ -299,7 +307,9 @@ void loop() {
 	
 } 
 
-
+void getBaroData() {	
+	ext_Pressure = baro.getPressurePascals();
+}
 // ==========================================================
 // PERIPHERALS
 // ==========================================================
