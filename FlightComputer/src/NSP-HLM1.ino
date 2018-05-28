@@ -21,15 +21,16 @@ bool satMuteEnabled = true;   //NO CONST!
 
 const float altitudeGainClimbTrigger = 200; //FT Minimum alt gain after startup to detect climb.
 const float altitudePerMinuteGainClimbTrigger = 200; //ft per minute to detect a climb
-const float altitudeLossPerMinuteForDescentDetection = -200;
-const float iterationsInLowDescentToTriggerRecovery = 50;
+const float altitudeLossPerMinuteForDescentDetection = -400;
+const float iterationsInLowDescentToTriggerRecovery = 80;
 const float minimumAltitudeToTriggerRecovery = 10000; //If above this level we will not trigger recovery (Should we remove this??)
 const float minimumSonarDistanceToConfirmRecovery = 1; //Meters
-const uint periodBetweenCellularReports = 30; //Seconds
-const uint periodBetweenSatelliteReports = 40; //Seconds
+const uint periodBetweenCellularReports = 28; //Seconds
+const uint periodBetweenSatelliteReports = 43; //Seconds
+const uint periodBetweenRadioReports = 2; //Seconds
 const float minimumBatteryForLEDUse = 70;
 const int anticollisionFlashInterval = 18; //External LED flash ever x seconds (see altitude condition too)
-const float maximumAltitudeForAntiCollision = 38000; // In Feets..
+const float maximumAltitudeForAntiCollision = 35000; // In Feets..
 // const uint periodBetweenSDWriteReports = 5; //Seconds
 // const char *SDFileName = "NSP2017Log.txt";
 bool debugMode = true;  //NO CONST!
@@ -276,18 +277,20 @@ void loop() {
 		signalFlareCheck();				
 	}
 
-	if (currentPeriod >	1000) { //Every Second
-		elapsedSeconds++;
+	if (currentPeriod >= 1000) { //Every Second
+		elapsedSeconds++;		
 		setMissionIndicators();
 		logDataToSDCard(); //HERE OR IN THE UPPER check?		
 		satcomKeepAlive();
-		sendDataToCloud();
-		sendDataToRadio();
+		sendDataToCloud();			
 		updateStage();
 		updateLocalSensors();
-		doDebugToComputer();					
-		lastCycleTime = currentTime; //Reset lastCycleTime for performing the next cycle calculation.
+		doDebugToComputer();
+		sendDataToRadio();					
+		lastCycleTime = currentTime; //Reset lastCycleTime for performing the next cycle calculation.		
 	}
+
+
 
 
 
@@ -359,7 +362,7 @@ void setMissionIndicators() {
 			}
 		}
 
-		if (elapsedSeconds % 2 == 0 ) { //LEDS					
+		if (elapsedSeconds % 2 == 0 ) { //LEDS
 			RGB.brightness(0);	
 			digitalWrite(EXTSTATUSLEDPin, HIGH);
 			if (missionWarningLED==true) { digitalWrite(EXTSTATUSLEDPin, HIGH); }
@@ -399,7 +402,9 @@ void sendDataToCloud() {
 }
 
 void sendDataToRadio() {
-	sendToRadio(telemetryString());
+	if (elapsedSeconds % periodBetweenRadioReports == 0) {	//SATELLITE
+		sendToRadio(telemetryString());		
+	}
 }
 
 void logDataToSDCard() { //TODO [Set a period for storage]
@@ -644,7 +649,9 @@ void sendToComputer(String text) {
 }
 
 void sendToRadio(String text) {	
-	RADIO.println(text);
+	int xmlength = text.length();
+	String textOutput = String(xmlength) + ">" + text;
+	RADIO.println(textOutput);
 }
 
 void sendToComputerAndRadio(String text) {
