@@ -18,6 +18,7 @@ int loopPeriod = 0;
 int lastTime = 0;
 int seconds = 0;
 int halfSeconds = 0;
+bool sendingToCloud = false;
 
 String lastMessage = "";
 
@@ -60,9 +61,7 @@ void loop() {
 
 	if (seconds % 12 == 0) {
 		seconds++;	
-		if (Particle.connected() == true) {	
-			sendToCloud(lastMessage);
-		}
+		sendToCloud(lastMessage);
 	}
 
 }
@@ -72,6 +71,8 @@ void loop() {
 //====[EVENTS]================================================
 void RADIOEvent()
 {	
+	if (sendingToCloud == true) { return; }
+
 	if (RADIO.available()) {
 		while (RADIO.available()) {			
 			digitalWrite(RadioStatusLED, LOW);
@@ -88,8 +89,8 @@ void RADIOEvent()
 					if (cleanField.indexOf(',') != -1) { //This is a telemetry string. Send it to the cloud. Otherwise only display locally.
 						// sendToCloud(cleanField);
 						queueToCloud(cleanField);
-					} else {
-						Serial.println("LOCAL MSG");
+					} else {						
+						Serial.println("<LOCAL> " + radioSerialData);
 					}
 				} else {
 					Serial.println("[Error] Checksum missmatch: \n    " + radioSerialData);
@@ -126,8 +127,12 @@ int groundRequest(String request) {
 	return 1;
 }
 
-void sendToCloud(String data) {		
-		Particle.publish("R", data);	
+void sendToCloud(String data) {	
+	if (sendingToCloud == false && Particle.connected()) {
+		sendingToCloud = true;
+		Particle.publish("R", data);			
+		sendingToCloud = false;
+	}
 }
 
 void queueToCloud(String data) {

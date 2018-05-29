@@ -26,9 +26,9 @@ const float altitudeLossPerMinuteForDescentDetection = -400;
 const float iterationsInLowDescentToTriggerRecovery = 80;
 const float minimumAltitudeToTriggerRecovery = 10000; //If above this level we will not trigger recovery (Should we remove this??)
 const float minimumSonarDistanceToConfirmRecovery = 1; //Meters
-const uint periodBetweenCellularReports = 28; //Seconds
-const uint periodBetweenSatelliteReports = 43; //Seconds
-const uint periodBetweenRadioReports = 2; //Seconds
+const uint periodBetweenCellularReports = 23; //Seconds
+const uint periodBetweenSatelliteReports = 33; //Seconds
+// const uint periodBetweenRadioReports = 2; //Seconds
 const float minimumBatteryForLEDUse = 70;
 const int anticollisionFlashInterval = 18; //External LED flash ever x seconds (see altitude condition too)
 const float maximumAltitudeForAntiCollision = 35000; // In Feets..
@@ -54,6 +54,7 @@ uint16_t rebootRecoveryMode = 0;
 struct RebootRecoveryData {
 	uint8_t version; //eeprom version check
  	uint8_t mode;
+ 	uint8_t groundRecovery;
  	float initialGPSAltitude;    
 };
 
@@ -121,6 +122,7 @@ bool satcomAlive = false;
 int cellSignalRSSI = -1;
 int cellSignalQuality = -1;
 
+bool transmittingToCloud = false;
 
 // ALTIMETER MODULE: MS5607
 Intersema::BaroPressure_MS5607B baro(true);
@@ -345,10 +347,16 @@ void checkRebootRecoveryMode() {
 		cellMuteEnabled = false;
 		satMuteEnabled = false;
 		sdMuteEnabled = false;
-		sendToComputer("[EVENT] >RECOVERY MODE DETECTED<");
+		sendToComputer("[EVENT] >RECOVERY M ODE DETECTED<");
 		sendToComputer("[EVENT] RECOVERY ALT: " + String(initialGPSAltitude));
 		writeLineToSDCard("[EVENT] >RECOVERY MODE DETECTED<");
 		writeLineToSDCard("[EVENT] RECOVERY ALT: " + String(initialGPSAltitude));
+
+		if (rebootRecoveryData.groundRecovery == 1) {
+			digitalWrite(BUZZERPin, HIGH);
+			writeLineToSDCard("[EVENT] >GROUND RECOVERY STAGE DETECTED<");
+			sendToComputer("[EVENT] >GROUND RECOVERY STAGE DETECTED<");
+		}
 	}
 
 }
@@ -412,7 +420,7 @@ void sendDataToCloud() {
 }
 
 void sendDataToRadio() {
-	if (elapsedSeconds % periodBetweenRadioReports == 0) {	//SATELLITE
+	if (transmittingToCloud == false) {	//SATELLITE
 		sendToRadio(telemetryString());		
 	}
 }
@@ -524,6 +532,12 @@ void updateStage() {
 				digitalWrite(BUZZERPin, HIGH);		
 				sendToComputer("[Stage] Recovery Detected at " + String(gpsAltitude));		
 				writeLineToSDCard("[Stage] Recovery Detected at " + String(gpsAltitude));		
+					RebootRecoveryData rebootRecoveryData;
+					rebootRecoveryData.mode = rebootRecoveryMode;
+					rebootRecoveryData.initialGPSAltitude = initialGPSAltitude;		
+					rebootRecoveryData.version = 0;
+					rebootRecoveryData.groundRecovery = 1;
+					EEPROM.put(eeprom_rebootRecoveryModeAddress, rebootRecoveryData);
 			}
 		}
 	
@@ -892,8 +906,9 @@ int computerRequest(String param) {
 
 		RebootRecoveryData rebootRecoveryData;
 		rebootRecoveryData.mode = rebootRecoveryMode;
-		rebootRecoveryData.initialGPSAltitude = initialGPSAltitude;
+		rebootRecoveryData.initialGPSAltitude = initialGPSAltitude;		
 		rebootRecoveryData.version = 0;
+		rebootRecoveryData.groundRecovery = 0;
 		EEPROM.put(eeprom_rebootRecoveryModeAddress, rebootRecoveryData);
 
 		// EEPROM.put(eeprom_rebootRecoveryModeAddress, rebootRecoveryMode);
@@ -906,12 +921,13 @@ int computerRequest(String param) {
 	if (param == "rigmode") {
 		cellMuteEnabled = true;
 		satMuteEnabled = true;		
-		rebootRecoveryMode = 0;
+		rebootRecoveryMode = 0;		
 		
 		RebootRecoveryData rebootRecoveryData;
 		rebootRecoveryData.mode = rebootRecoveryMode;
 		rebootRecoveryData.initialGPSAltitude = initialGPSAltitude;
 		rebootRecoveryData.version = 0;
+		rebootRecoveryData.groundRecovery = 0;
 		EEPROM.put(eeprom_rebootRecoveryModeAddress, rebootRecoveryData);
 		writeLineToSDCard("[EVENT] Rig Mode Enabled");
 		sendToComputerAndRadio("[EVENT] Rig Mode Enabled");
@@ -1322,8 +1338,10 @@ int performPreflightCheck() {
 // TELEMETRY - MODEMS - CONTROL
 // ==========================================================
 void sendStatusToCell() {
-	if (Particle.connected() == true && cellMuteEnabled == false) { 		
+	if (Particle.connected() == true && cellMuteEnabled == false && transmittingToCloud == false) {
+		transmittingToCloud = true;
 		Particle.publish("S",telemetryString());		
+		transmittingToCloud = false;
 	}
 }
 

@@ -215,7 +215,7 @@ private:
 #ifdef DEBUG
         else
         {
-      Serial.println("No data available in ReadCoefficient()");
+      // Serial.println("No data available in ReadCoefficient()");
         }
 #endif 
     
@@ -315,7 +315,7 @@ private:
 #ifdef DEBUG
         else
         {
-      Serial.println("No data available in cmdAdc()");
+      // Serial.println("No data available in cmdAdc()");
         }
 #endif 
         
